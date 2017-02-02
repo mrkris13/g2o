@@ -27,7 +27,7 @@
 #ifndef G2O_SIMULATOR_H
 #define G2O_SIMULATOR_H
 
-#include "se2.h"
+#include "g2o/types/slam2d/se2.h"
 #include "g2o_tutorial_slam2d_api.h"
 
 #include <Eigen/StdVector>

@@ -31,11 +31,11 @@
 
 #include "simulator.h"
 
-#include "vertex_se2.h"
-#include "vertex_point_xy.h"
-#include "edge_se2.h"
-#include "edge_se2_pointxy.h"
-#include "types_tutorial_slam2d.h"
+#include "g2o/types/slam2d/vertex_se2.h"
+#include "g2o/types/slam2d/vertex_point_xy.h"
+#include "g2o/types/slam2d/edge_se2.h"
+#include "g2o/types/slam2d/edge_se2_pointxy.h"
+#include "g2o/types/slam2d/parameter_se2_offset.h"
 
 #include "g2o/core/sparse_optimizer.h"
 #include "g2o/core/block_solver.h"
@@ -47,11 +47,14 @@
 using namespace std;
 using namespace g2o;
 using namespace g2o::tutorial;
+using std::size_t;
 
 class BearingSlam {
  public:
   BearingSlam();
   ~BearingSlam();
+
+  void AddOdometry(const Simulator::GridEdge& odom);
 
  private:
   typedef BlockSolver< BlockSolverTraits<-1, -1> >  SlamBlockSolver;
@@ -61,14 +64,38 @@ class BearingSlam {
   std::unique_ptr<SlamBlockSolver> block_solver_;
   std::unique_ptr<g2o::OptimizationAlgorithmGaussNewton> lm_solver_;
   g2o::SparseOptimizer optimizer_;
+
+  g2o::SE2 sensor_offset_tf_;
+  std::unique_ptr<g2o::ParameterSE2Offset> sensor_offset_;
+
+  std::unordered_map<size_t, g2o::SE2> poses_;
+  std::unordered_map<size_t, g2o::Vector2D> landmarks_;
+  size_t last_pose_id_;
 };
 
-BearingSlam::BearingSlam()
-  : linear_solver_(new SlamLinearSolver())
-  , block_solver_(new SlamBlockSolver(linear_solver_.get()))
-  , lm_solver_(new g2o::OptimizationAlgorithmGaussNewton(block_solver_.get())) {
+BearingSlam::BearingSlam() {
+  // Allocate solvers
+  linear_solver_.reset(new SlamLinearSolver());
   linear_solver_->setBlockOrdering(false);
+  block_solver_.reset(new SlamBlockSolver(linear_solver_.get()));
+  lm_solver_.reset(new g2o::OptimizationAlgorithmGaussNewton(block_solver_.get()));
   optimizer_.setAlgorithm(lm_solver_.get());
+  optimizer_.setVerbose(true);
+
+  // Configure sensor offset
+  sensor_offset_.reset(new g2o::ParameterSE2Offset());
+  sensor_offset_tf_ = g2o::SE2(0.2, 0.1, -0.1);
+  sensor_offset_->setOffset(sensor_offset_tf_);
+  sensor_offset_->setId(0);
+
+  // Add first pose
+  last_pose_id_ = 0;
+  poses_[last_pose_id_] = g2o::SE2();
+  g2o::VertexSE2* first_pose = new g2o::VertexSE2;
+  first_pose->setId(last_pose_id_);
+  first_pose->setEstimate(poses_[last_pose_id_]);
+  first_pose->setFixed(true);  // fix first pose
+  optimizer_.addVertex(first_pose);
 }
 
 BearingSlam::~BearingSlam() {
@@ -79,10 +106,38 @@ BearingSlam::~BearingSlam() {
   block_solver_.release();
   linear_solver_.release();
 
-  // Release all singletons
   Factory::destroy();
   OptimizationAlgorithmFactory::destroy();
-  HyperGraphActionLibrary::destroy();
+}
+
+void BearingSlam::AddOdometry(const Simulator::GridEdge& odom) {
+  if (poses_.count(odom.from) > 0) {
+    // Lookup previous pose
+    g2o::SE2 prev_pose = poses_[odom.from];
+
+    // Create new pose if neccessary
+    if (poses_.count(odom.to) == 0) {
+      g2o::SE2 pred_pose = prev_pose * odom.simulatorTransf;
+
+      last_pose_id_ = odom.to;
+      poses_[odom.to] = pred_pose;
+
+      g2o::VertexSE2* v = new g2o::VertexSE2;
+      v->setId(odom.to);
+      v->setEstimate(pred_pose);
+      optimizer_.addVertex(v);
+    }
+
+    // Add the odometry edge
+    g2o::EdgeSE2* edge = new g2o::EdgeSE2;
+    edge->vertices()[0] = optimizer_.vertex(odom.from);
+    edge->vertices()[1] = optimizer_.vertex(odom.to);
+    edge->setMeasurement(odom.simulatorTransf);
+    edge->setInformation(odom.information);
+    optimizer_.addEdge(edge);
+  } else {
+    std::cerr << "FUCK. Base pose in AddOdometry doesn't exist yet.!\n";
+  }
 }
 
 int main()
@@ -191,7 +246,7 @@ int main()
   // destroy all the singletons
   Factory::destroy();
   OptimizationAlgorithmFactory::destroy();
-  HyperGraphActionLibrary::destroy();
+  // HyperGraphActionLibrary::destroy();
 
   return 0;
 }
