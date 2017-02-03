@@ -53,6 +53,30 @@ namespace g2o {
     l2->setEstimate(t*vr);
   }
 
+#ifndef NUMERIC_JACOBIAN_TWO_D_TYPES
+  void EdgeSE2PointXYBearing::linearizeOplus()
+  {
+    const VertexSE2* vi     = static_cast<const VertexSE2*>(_vertices[0]);
+    const VertexPointXY* vj = static_cast<const VertexPointXY*>(_vertices[1]);
+    const double& x1        = vi->estimate().translation()[0];
+    const double& y1        = vi->estimate().translation()[1];
+    const double& x2        = vj->estimate()[0];
+    const double& y2        = vj->estimate()[1];
+
+    Vector2D d;
+    d << x2 - x1, y2 - y1;
+
+    const double inv_dn2 = 1.0 / (d(0)*d(0) + d(1)*d(1));
+
+    _jacobianOplusXi( 0 , 0 ) =  d(0) * inv_dn2;
+    _jacobianOplusXi( 0 , 1 ) = -d(1) * inv_dn2;
+    _jacobianOplusXi( 0 , 2 ) = 1.0;
+
+    _jacobianOplusXj( 0 , 0 ) = -d(0) * inv_dn2;
+    _jacobianOplusXj( 0 , 1 ) =  d(1) * inv_dn2;
+  }
+#endif
+
   bool EdgeSE2PointXYBearing::read(std::istream& is)
   {
     is >> _measurement >> information()(0,0);
