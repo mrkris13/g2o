@@ -234,7 +234,7 @@ namespace g2o {
         covariance(0, 0) = landmarkNoise[0]*landmarkNoise[0];
         covariance(1, 1) = landmarkNoise[1]*landmarkNoise[1];
         Matrix2d information = covariance.inverse();
-        const double bearing_noise = 0.15;  // [rad]
+        const double bearing_noise = 0.05;  // [rad]
         Eigen::Matrix<double, 1, 1> bearing_information;
         bearing_information << 1.0 / (bearing_noise * bearing_noise);
 
@@ -282,6 +282,7 @@ namespace g2o {
             lbe.to = l->id;
             lbe.trueMeas = trueBearing;
             lbe.simulatorMeas = bearing;
+            lbe.initPos = l->truePose;
             lbe.information = bearing_information;
           }
         }

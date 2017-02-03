@@ -105,6 +105,7 @@ namespace g2o {
           int to;
           double trueMeas;
           double simulatorMeas;
+          Eigen::Vector2d initPos;
           Eigen::Matrix<double, 1, 1> information;
           EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
         };
