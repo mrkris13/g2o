@@ -56,7 +56,9 @@ class BearingSlam {
 
   void AddOdometry(const Simulator::GridEdge& odom);
   void AddObservation(const Simulator::LandmarkEdge& obs);
-  void Optimize();
+  void Optimize(const int iterations);
+
+  g2o::SE2 GetLatestEstimate() const { return poses_.at(last_pose_id_); }
 
  private:
   typedef BlockSolver< BlockSolverTraits<-1, -1> >  SlamBlockSolver;
@@ -169,12 +171,10 @@ void BearingSlam::AddObservation(const Simulator::LandmarkEdge& obs) {
   }
 }
 
-void BearingSlam::Optimize() {
+void BearingSlam::Optimize(const int iterations) {
   // Optimize
-  std::cout << "Optimizing...\n";
   optimizer_.initializeOptimization();
-  optimizer_.optimize(10);
-  std::cout << "  done!\n";
+  optimizer_.optimize(iterations);
 
   // Update state
   const g2o::SparseOptimizer::VertexContainer& vertices = optimizer_.activeVertices();
@@ -199,28 +199,32 @@ int main()
   // TODO simulate different sensor offset
   // simulate a robot observing landmarks while travelling on a grid
   SE2 sensorOffsetTransf(0.2, 0.1, -0.1);
-  int numNodes = 300;
+  int numNodes = 10;
   Simulator simulator;
   simulator.simulate(numNodes, sensorOffsetTransf);
 
   BearingSlam bs;
 
-  // second add the odometry constraints
-  cerr << "Optimization: Adding odometry measurements ... ";
-  for (size_t i = 0; i < simulator.odometry().size(); ++i) {
-    const Simulator::GridEdge& simEdge = simulator.odometry()[i];
-    bs.AddOdometry(simEdge);
-  }
-  cerr << "done." << endl;
+  // Walk through one pose at a time
+  auto itr_p = simulator.poses().cbegin() + 1;  // start off by one
+  auto itr_odom = simulator.odometry().cbegin();
+  auto itr_obs = simulator.landmarkObservations().cbegin();
+  for (; itr_p != simulator.poses().cend(); ++itr_p, ++itr_odom) {
+    bs.AddOdometry(*itr_odom);
+    while (itr_obs != simulator.landmarkObservations().cend() && itr_obs->from <= itr_p->id) {
+      bs.AddObservation(*itr_obs);
+      ++itr_obs;
+    }
 
-  cerr << "Optimization: add landmark observations ... ";
-  for (size_t i = 0; i < simulator.landmarkObservations().size(); ++i) {
-    const Simulator::LandmarkEdge& simEdge = simulator.landmarkObservations()[i];
-    bs.AddObservation(simEdge);
+    bs.Optimize(5);
+    g2o::SE2 est_pose, true_pose;
+    est_pose = bs.GetLatestEstimate();
+    true_pose = itr_p->truePose;
+    std::cout << "Estimate SE2: " << est_pose.toVector().transpose() << std::endl;
+    std::cout << "True SE2: " << true_pose.toVector().transpose() << std::endl;
+    std::cout << "\n\n\n";
   }
-  cerr << "done." << endl;
 
-  bs.Optimize();
   return 0;
 
 }
