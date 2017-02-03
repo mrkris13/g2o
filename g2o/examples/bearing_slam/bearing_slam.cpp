@@ -35,6 +35,7 @@
 #include "g2o/types/slam2d/vertex_point_xy.h"
 #include "g2o/types/slam2d/edge_se2.h"
 #include "g2o/types/slam2d/edge_se2_pointxy.h"
+#include "g2o/types/slam2d/edge_se2_pointxy_bearing.h"
 #include "g2o/types/slam2d/parameter_se2_offset.h"
 
 #include "g2o/core/sparse_optimizer.h"
@@ -56,6 +57,7 @@ class BearingSlam {
 
   void AddOdometry(const Simulator::GridEdge& odom);
   void AddObservation(const Simulator::LandmarkEdge& obs);
+  void AddBearingObservation(const Simulator::LandmarkBearingEdge& obs);
   void Optimize(const int iterations);
 
   g2o::SE2 GetLatestEstimate() const { return poses_.at(last_pose_id_); }
@@ -75,6 +77,9 @@ class BearingSlam {
   std::unordered_map<size_t, g2o::SE2> poses_;
   std::unordered_map<size_t, g2o::Vector2D> landmarks_;
   size_t last_pose_id_;
+
+  // Cached things to handle delayed landmark initialization
+  std::unordered_map<size_t, Simulator::LandmarkBearingEdge> uninitialized_landmarks_;
 };
 
 BearingSlam::BearingSlam() {
@@ -88,7 +93,7 @@ BearingSlam::BearingSlam() {
 
   // Configure sensor offset
   sensor_offset_.reset(new g2o::ParameterSE2Offset());
-  sensor_offset_tf_ = g2o::SE2(0.2, 0.1, -0.1);
+  sensor_offset_tf_ = g2o::SE2(0.0, 0.0, 9.0);
   sensor_offset_->setOffset(sensor_offset_tf_);
   sensor_offset_->setId(0);
 
@@ -171,6 +176,60 @@ void BearingSlam::AddObservation(const Simulator::LandmarkEdge& obs) {
   }
 }
 
+void BearingSlam::AddBearingObservation(const Simulator::LandmarkBearingEdge& obs) {
+  if (poses_.count(obs.from) > 0) {
+    // Initialize landmark if necessary
+    if (landmarks_.count(obs.to) == 0) {
+      if (uninitialized_landmarks_.count(obs.to) == 0) {
+        uninitialized_landmarks_[obs.to] = obs;
+        return;  // can't add observation just yet
+      } else {
+        // Triangulate landmark from two observations
+        const Simulator::LandmarkBearingEdge& prev_obs = uninitialized_landmarks_.at(obs.to);
+        const g2o::SE2& prev_pose = poses_.at(prev_obs.from);
+        const g2o::SE2& curr_pose = poses_.at(obs.from);
+
+        Eigen::Vector2d v1, v2;
+        v1 << 1.0, tan(prev_pose.rotation().angle() + prev_obs.simulatorMeas);
+        v2 << 1.0, tan(curr_pose.rotation().angle() + obs.simulatorMeas);
+
+        Eigen::Vector2d b = prev_pose.translation() - curr_pose.translation();
+        Eigen::Matrix2d A;
+        A <<
+          -v1(0), v2(0),
+          -v1(1), v2(1);
+        Eigen::Vector2d r = A.inverse() * b;
+
+        Eigen::Vector2d pred_lm = prev_pose.translation() + v1*r(0);
+        Eigen::Vector2d pred2 = curr_pose.translation() + v2*r(1);
+        if ((pred_lm - pred2).norm() > 1e-5) {
+          std::cerr << "Fuck predictions don't match! Skipping\n";
+          return;
+        }
+        landmarks_[obs.to] = pred_lm;
+        g2o::VertexPointXY* v = new g2o::VertexPointXY;
+        v->setId(obs.to);
+        v->setEstimate(pred_lm);
+        optimizer_.addVertex(v);
+        std::cout << "Initialized landmark " << obs.to << " at " << pred_lm.transpose() << std::endl;
+
+        // Remove from uninitialized list
+        uninitialized_landmarks_.erase(obs.to);
+      }
+    }
+
+    g2o::EdgeSE2PointXYBearing* edge = new g2o::EdgeSE2PointXYBearing;
+    edge->vertices()[0] = optimizer_.vertex(obs.from);
+    edge->vertices()[1] = optimizer_.vertex(obs.to);
+    edge->setMeasurement(obs.simulatorMeas);
+    edge->setInformation(obs.information);
+    edge->setParameterId(0, sensor_offset_->id());
+    optimizer_.addEdge(edge);
+  } else {
+    std::cerr << "FUCK. Base pose in AddObservation doesn't exist yet!\n";
+  }
+}
+
 void BearingSlam::Optimize(const int iterations) {
   // Optimize
   optimizer_.initializeOptimization();
@@ -198,7 +257,7 @@ int main()
 {
   // TODO simulate different sensor offset
   // simulate a robot observing landmarks while travelling on a grid
-  SE2 sensorOffsetTransf(0.2, 0.1, -0.1);
+  SE2 sensorOffsetTransf(0.0, 0.0, 0.0);
   int numNodes = 10;
   Simulator simulator;
   simulator.simulate(numNodes, sensorOffsetTransf);
@@ -208,11 +267,12 @@ int main()
   // Walk through one pose at a time
   auto itr_p = simulator.poses().cbegin() + 1;  // start off by one
   auto itr_odom = simulator.odometry().cbegin();
-  auto itr_obs = simulator.landmarkObservations().cbegin();
+  auto itr_obs = simulator.landmarkBearingObservations().cbegin();
   for (; itr_p != simulator.poses().cend(); ++itr_p, ++itr_odom) {
     bs.AddOdometry(*itr_odom);
-    while (itr_obs != simulator.landmarkObservations().cend() && itr_obs->from <= itr_p->id) {
-      bs.AddObservation(*itr_obs);
+    while (itr_obs != simulator.landmarkBearingObservations().cend() && itr_obs->from <= itr_p->id) {
+      std::cout << "Observing landmark " << itr_obs->to << std::endl;
+      bs.AddBearingObservation(*itr_obs);
       ++itr_obs;
     }
 

@@ -234,6 +234,9 @@ namespace g2o {
         covariance(0, 0) = landmarkNoise[0]*landmarkNoise[0];
         covariance(1, 1) = landmarkNoise[1]*landmarkNoise[1];
         Matrix2d information = covariance.inverse();
+        const double bearing_noise = 0.15;  // [rad]
+        Eigen::Matrix<double, 1, 1> bearing_information;
+        bearing_information << 1.0 / (bearing_noise * bearing_noise);
 
         for (size_t i = 0; i < poses.size(); ++i) {
           const GridPose& p = poses[i];
@@ -252,6 +255,7 @@ namespace g2o {
             Landmark* l = p.landmarks[j];
             Vector2d observation;
             Vector2d trueObservation = trueInv * l->truePose;
+            double trueBearing = atan2(trueObservation[1], trueObservation[0]);
             observation = trueObservation;
             if (l->seenBy.size() > 0 && l->seenBy[0] == p.id) { // write the initial position of the landmark
               observation = (p.simulatorPose * sensorOffset).inverse() * l->simulatedPose;
@@ -260,6 +264,7 @@ namespace g2o {
               observation[0] += Rand::gauss_rand(0., landmarkNoise[0]);
               observation[1] += Rand::gauss_rand(0., landmarkNoise[1]);
             }
+            double bearing = trueBearing + Rand::gauss_rand(0., bearing_noise);
 
             _landmarkObservations.push_back(LandmarkEdge());
             LandmarkEdge& le = _landmarkObservations.back();
@@ -269,6 +274,15 @@ namespace g2o {
             le.trueMeas = trueObservation;
             le.simulatorMeas = observation;
             le.information = information;
+
+            _landmarkBearingObservations.push_back(LandmarkBearingEdge());
+            LandmarkBearingEdge& lbe = _landmarkBearingObservations.back();
+
+            lbe.from = p.id;
+            lbe.to = l->id;
+            lbe.trueMeas = trueBearing;
+            lbe.simulatorMeas = bearing;
+            lbe.information = bearing_information;
           }
         }
         cerr << "done." << endl;

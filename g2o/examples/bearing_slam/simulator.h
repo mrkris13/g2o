@@ -99,6 +99,17 @@ namespace g2o {
         };
         typedef std::vector<LandmarkEdge, Eigen::aligned_allocator<LandmarkEdge> >  LandmarkEdgeVector;
 
+        struct LandmarkBearingEdge
+        {
+          int from;
+          int to;
+          double trueMeas;
+          double simulatorMeas;
+          Eigen::Matrix<double, 1, 1> information;
+          EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+        };
+        typedef std::vector<LandmarkBearingEdge, Eigen::aligned_allocator<LandmarkBearingEdge> > LandmarkBearingEdgeVector;
+
       public:
         Simulator();
         ~Simulator();
@@ -109,12 +120,14 @@ namespace g2o {
         const LandmarkVector& landmarks() const { return _landmarks;}
         const GridEdgeVector& odometry() const { return _odometry;}
         const LandmarkEdgeVector& landmarkObservations() const { return _landmarkObservations;}
+        const LandmarkBearingEdgeVector& landmarkBearingObservations() const { return _landmarkBearingObservations; }
 
       protected:
         PosesVector _poses;
         LandmarkVector _landmarks;
         GridEdgeVector _odometry;
         LandmarkEdgeVector _landmarkObservations;
+        LandmarkBearingEdgeVector _landmarkBearingObservations;
 
         GridPose generateNewPose(const GridPose& prev, const SE2& trueMotion, const Eigen::Vector2d& transNoise, double rotNoise);
         SE2 getMotion(int motionDirection, double stepLen);
