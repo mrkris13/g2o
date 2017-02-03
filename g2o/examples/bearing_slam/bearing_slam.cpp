@@ -55,6 +55,8 @@ class BearingSlam {
   ~BearingSlam();
 
   void AddOdometry(const Simulator::GridEdge& odom);
+  void AddObservation(const Simulator::LandmarkEdge& obs);
+  void Optimize();
 
  private:
   typedef BlockSolver< BlockSolverTraits<-1, -1> >  SlamBlockSolver;
@@ -113,11 +115,11 @@ BearingSlam::~BearingSlam() {
 void BearingSlam::AddOdometry(const Simulator::GridEdge& odom) {
   if (poses_.count(odom.from) > 0) {
     // Lookup previous pose
-    g2o::SE2 prev_pose = poses_[odom.from];
+    const g2o::SE2& prev_pose = poses_[odom.from];
 
     // Create new pose if neccessary
     if (poses_.count(odom.to) == 0) {
-      g2o::SE2 pred_pose = prev_pose * odom.simulatorTransf;
+      const g2o::SE2 pred_pose = prev_pose * odom.simulatorTransf;
 
       last_pose_id_ = odom.to;
       poses_[odom.to] = pred_pose;
@@ -136,7 +138,59 @@ void BearingSlam::AddOdometry(const Simulator::GridEdge& odom) {
     edge->setInformation(odom.information);
     optimizer_.addEdge(edge);
   } else {
-    std::cerr << "FUCK. Base pose in AddOdometry doesn't exist yet.!\n";
+    std::cerr << "FUCK. Base pose in AddOdometry doesn't exist yet!\n";
+  }
+}
+
+void BearingSlam::AddObservation(const Simulator::LandmarkEdge& obs) {
+  if (poses_.count(obs.from) > 0) {
+    // Lookup base pose
+    const g2o::SE2& prev_pose = poses_[obs.from];
+
+    // Initialize landmark if necessary
+    if (landmarks_.count(obs.to) == 0) {
+      const g2o::Vector2D pred_lm = prev_pose * obs.simulatorMeas;
+      landmarks_[obs.to] = pred_lm;
+      g2o::VertexPointXY* v = new g2o::VertexPointXY;
+      v->setId(obs.to);
+      v->setEstimate(pred_lm);
+      optimizer_.addVertex(v);
+    }
+
+    g2o::EdgeSE2PointXY* edge = new g2o::EdgeSE2PointXY;
+    edge->vertices()[0] = optimizer_.vertex(obs.from);
+    edge->vertices()[1] = optimizer_.vertex(obs.to);
+    edge->setMeasurement(obs.simulatorMeas);
+    edge->setInformation(obs.information);
+    edge->setParameterId(0, sensor_offset_->id());
+    optimizer_.addEdge(edge);
+  } else {
+    std::cerr << "FUCK. Base pose in AddObservation doesn't exist yet!\n";
+  }
+}
+
+void BearingSlam::Optimize() {
+  // Optimize
+  std::cout << "Optimizing...\n";
+  optimizer_.initializeOptimization();
+  optimizer_.optimize(10);
+  std::cout << "  done!\n";
+
+  // Update state
+  const g2o::SparseOptimizer::VertexContainer& vertices = optimizer_.activeVertices();
+  for (auto itr = vertices.cbegin(); itr != vertices.cend(); ++itr) {
+    const int id = (**itr).id();
+    if (poses_.count(id) > 0) {
+      double data[3];
+      dynamic_cast<g2o::VertexSE2*>(*itr)->getEstimateData(data);
+      poses_[id] = g2o::SE2(data[0], data[1], data[2]);
+    } else if (landmarks_.count(id) > 0) {
+      double data[2];
+      dynamic_cast<g2o::VertexPointXY*>(*itr)->getEstimateData(data);
+      landmarks_[id] << data[0], data[1];
+    } else {
+      std::cerr << "FUCK. Unrecognized vertex id.\n";
+    }
   }
 }
 
